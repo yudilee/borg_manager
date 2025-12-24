@@ -1,0 +1,13 @@
+# Borg Backup Manager - Dependencies
+
+# Core dependencies
+pystray>=0.19.0          # System tray icon support
+Pillow>=9.0.0            # Image processing for icons
+paramiko>=2.11.0         # SSH connections (Windows support)
+matplotlib>=3.5.0        # Charts and graphs
+
+# Security
+keyring>=23.0.0          # Secure passphrase storage
+
+# Optional - for desktop notifications
+# plyer>=2.0.0           # Cross-platform notifications (optional)

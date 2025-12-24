@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Borg Backup Manager
+Exec=borg-manager
+Icon=borg-manager
+Categories=Utility;System;
+Terminal=false

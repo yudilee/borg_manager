@@ -1,0 +1,4 @@
+#!/bin/sh
+export PATH="${APPDIR}/usr/bin:${PATH}"
+export LD_LIBRARY_PATH="${APPDIR}/usr/lib:${LD_LIBRARY_PATH}"
+exec "borg-manager" "$@"
