@@ -1,3 +1,9 @@
+"""
+Borg Backup Manager - GUI Application
+
+A full-featured graphical interface for managing BorgBackup repositories.
+"""
+
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 import subprocess
@@ -11,7 +17,6 @@ import re
 import time
 import sys
 import platform
-import importlib.util
 import uuid
 import stat
 import gzip
@@ -27,7 +32,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger('BorgManager')
 
-# Try to import system tray libraries
+# ===========================================
+# Import from modular package
+# ===========================================
+from borg_manager.utils.constants import (
+    THEME_COLORS, ICONS, icon, USE_EMOJI,
+    PLATFORM_FONTS, DEFAULT_FONT, MONO_FONT, get_platform_fonts,
+    KEYRING_SERVICE
+)
+from borg_manager.utils.formatting import format_bytes, time_since
+from borg_manager.utils.notifications import send_notification
+from borg_manager.utils.security import (
+    store_passphrase, retrieve_passphrase, delete_passphrase, HAS_KEYRING
+)
+
+# ===========================================
+# Try to import optional dependencies
+# ===========================================
 HAS_TRAY = False
 try:
     import pystray
@@ -36,7 +57,6 @@ try:
 except (ImportError, ValueError, Exception) as e:
     logger.warning(f"System Tray not available: {e}")
 
-# Try to import Matplotlib for Charts
 HAS_MATPLOTLIB = False
 try:
     import matplotlib
@@ -48,7 +68,6 @@ try:
 except ImportError:
     logger.info("Matplotlib not found. Charts will be disabled.")
 
-# Try to import Paramiko for portable SSH (Windows support)
 HAS_PARAMIKO = False
 try:
     import paramiko
@@ -56,162 +75,17 @@ try:
 except ImportError:
     logger.info("Paramiko not found. Will use system SSH command.")
 
-# Try to import keyring for secure passphrase storage
-HAS_KEYRING = False
-try:
-    import keyring
-    HAS_KEYRING = True
-except ImportError:
-    logger.info("Keyring not found. Passphrases will be stored in config file.")
-
-# ==========================================
-# DESKTOP NOTIFICATIONS HELPER
-# ==========================================
-def send_notification(title: str, message: str, urgency: str = "normal") -> None:
-    """Send a desktop notification cross-platform.
-    
-    Args:
-        title: Notification title
-        message: Notification body text
-        urgency: Priority level (low, normal, critical)
-    """
-    try:
-        system = platform.system()
-        if system == "Linux":
-            # Use notify-send on Linux
-            subprocess.run([
-                "notify-send", 
-                "-u", urgency,
-                "-a", "Borg Backup Manager",
-                title, 
-                message
-            ], capture_output=True, timeout=5)
-        elif system == "Darwin":
-            # Use osascript on macOS
-            script = f'display notification "{message}" with title "{title}"'
-            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
-        elif system == "Windows":
-            # Use PowerShell toast notification on Windows
-            ps_script = f'''
-            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-            $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-            $textNodes = $template.GetElementsByTagName("text")
-            $textNodes.Item(0).AppendChild($template.CreateTextNode("{title}")) | Out-Null
-            $textNodes.Item(1).AppendChild($template.CreateTextNode("{message}")) | Out-Null
-            $toast = [Windows.UI.Notifications.ToastNotification]::new($template)
-            [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Borg Backup Manager").Show($toast)
-            '''
-            subprocess.run(["powershell", "-Command", ps_script], capture_output=True, timeout=10)
-    except Exception as e:
-        logger.debug(f"Notification failed: {e}")
-
-# THEME CONFIGURATION
-# ==========================================
-
-# ==========================================
-# SECURE PASSPHRASE STORAGE (uses keyring if available)
-# ==========================================
-KEYRING_SERVICE = "BorgBackupManager"
-
-def store_passphrase(repo_name: str, passphrase: str) -> bool:
-    """Store passphrase securely in system keyring.
-    
-    Args:
-        repo_name: Repository identifier (used as key)
-        passphrase: The passphrase to store
-        
-    Returns:
-        True if stored in keyring, False if keyring unavailable
-    """
-    if not HAS_KEYRING or not passphrase:
-        return False
-    try:
-        keyring.set_password(KEYRING_SERVICE, repo_name, passphrase)
-        logger.debug(f"Stored passphrase for {repo_name} in keyring")
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to store passphrase in keyring: {e}")
-        return False
-
-def retrieve_passphrase(repo_name: str) -> Optional[str]:
-    """Retrieve passphrase from system keyring.
-    
-    Args:
-        repo_name: Repository identifier
-        
-    Returns:
-        The passphrase or None if not found/keyring unavailable
-    """
-    if not HAS_KEYRING:
-        return None
-    try:
-        passphrase = keyring.get_password(KEYRING_SERVICE, repo_name)
-        if passphrase:
-            logger.debug(f"Retrieved passphrase for {repo_name} from keyring")
-        return passphrase
-    except Exception as e:
-        logger.warning(f"Failed to retrieve passphrase from keyring: {e}")
-        return None
-
-def delete_passphrase(repo_name: str) -> bool:
-    """Delete passphrase from system keyring.
-    
-    Args:
-        repo_name: Repository identifier
-        
-    Returns:
-        True if deleted, False if not found or keyring unavailable
-    """
-    if not HAS_KEYRING:
-        return False
-    try:
-        keyring.delete_password(KEYRING_SERVICE, repo_name)
-        logger.debug(f"Deleted passphrase for {repo_name} from keyring")
-        return True
-    except Exception as e:
-        logger.debug(f"Failed to delete passphrase from keyring: {e}")
-        return False
-
-THEME_COLORS = {
-    "light": {
-        "text_main": "#222", "text_sub": "#555", "text_meta": "#666",
-        "bg_card": "#ffffff", "bg_window": "#f0f0f0",
-        "card_status": "#e0f7fa", "card_archive": "#f3e5f5", "card_storage": "#e8f5e9", "card_sched": "#fff3e0",
-        "card_server": "#e3f2fd", "card_repo": "#e0f2f1",
-        "stat_orig": "#2196F3", "stat_comp": "#FF9800", "stat_dedup": "#9C27B0",
-        "success": "#4CAF50", "error": "#F44336",
-        "tree_inc": "#e6ffe6", "tree_exc": "#ffe6e6"
-    },
-    "dark": {
-        "text_main": "#eeeeee", "text_sub": "#cccccc", "text_meta": "#aaaaaa",
-        "bg_card": "#424242", "bg_window": "#303030",
-        "card_status": "#004d40", "card_archive": "#4a148c", "card_storage": "#1b5e20", "card_sched": "#bf360c",
-        "card_server": "#0d47a1", "card_repo": "#00695c",
-        "stat_orig": "#64b5f6", "stat_comp": "#ffb74d", "stat_dedup": "#ba68c8",
-        "success": "#81c784", "error": "#e57373",
-        "tree_inc": "#1b5e20", "tree_exc": "#b71c1c"
-    }
-}
-
-# ==========================================
-# CONFIGURATION & UTILS (PORTABLE + ROBUST)
-# ==========================================
-
-# 1. Determine the Application Root (Folder containing the script or exe)
+# ===========================================
+# Application Paths (local to main app)
+# ===========================================
 if getattr(sys, 'frozen', False):
-    # Running as compiled .exe
     APP_EXEC_DIR = os.path.dirname(sys.executable)
-    # For compiled app, ALWAYS use user home for config/logs to avoid Read-Only errors (AppImage/System install)
     USE_USER_HOME = True
 else:
-    # Running as .py script
     APP_EXEC_DIR = os.path.dirname(os.path.abspath(__file__))
     USE_USER_HOME = False
 
-# 2. Define Folder Paths
-# Default to portable (local) unless compiled
 DATA_ROOT = APP_EXEC_DIR
-
 if USE_USER_HOME:
     DATA_ROOT = os.path.join(os.path.expanduser("~"), ".config", "borg_manager")
     os.makedirs(DATA_ROOT, exist_ok=True)
@@ -221,162 +95,19 @@ SCRIPTS_DIR = os.path.join(DATA_ROOT, "scripts")
 LOGS_DIR = os.path.join(DATA_ROOT, "logs")
 LOGS_ARCHIVE_DIR = os.path.join(LOGS_DIR, "archive")
 
-# 3. Intelligent Config File Detection
-# Priority 1: Check if config.json exists in DATA_ROOT
 ROOT_CONFIG = os.path.join(DATA_ROOT, "config.json")
-# Priority 2: Check subfolder
 SUB_CONFIG = os.path.join(CONFIG_SUBDIR, "config.json")
 
 if os.path.exists(ROOT_CONFIG):
     CONFIG_FILE = ROOT_CONFIG
-    logger.debug(f"Found configuration in ROOT: {CONFIG_FILE}")
 else:
-    # Default to the organized subfolder
     CONFIG_FILE = SUB_CONFIG
-    logger.debug(f"Using configuration path: {CONFIG_FILE}")
 
-# Ensure directories exist (Create 'config' folder only if we are using the subfolder path)
 if CONFIG_FILE == SUB_CONFIG:
     os.makedirs(CONFIG_SUBDIR, exist_ok=True)
 
 for d in [SCRIPTS_DIR, LOGS_DIR, LOGS_ARCHIVE_DIR]:
     os.makedirs(d, exist_ok=True)
-
-# ==========================================
-# PLATFORM-SPECIFIC FONT SELECTION
-# ==========================================
-# Select fonts with best emoji/unicode support per platform
-def get_platform_fonts():
-    """Get optimal fonts for current platform with emoji support."""
-    system = platform.system()
-    
-    if system == "Windows":
-        # Segoe UI has excellent emoji support on Windows
-        return {
-            "default": "Segoe UI",
-            "mono": "Consolas",
-            "emoji": "Segoe UI Emoji",
-        }
-    elif system == "Darwin":  # macOS
-        # SF Pro and Apple Color Emoji
-        return {
-            "default": "SF Pro Text",
-            "mono": "SF Mono",
-            "emoji": "Apple Color Emoji",
-        }
-    else:  # Linux
-        # Noto fonts have the best Unicode/emoji coverage
-        return {
-            "default": "Noto Sans",
-            "mono": "Noto Sans Mono",
-            "emoji": "Noto Color Emoji",
-        }
-
-PLATFORM_FONTS = get_platform_fonts()
-DEFAULT_FONT = PLATFORM_FONTS["default"]
-MONO_FONT = PLATFORM_FONTS["mono"]
-
-# ==========================================
-# SAFE EMOJI SYSTEM (with fallback)
-# ==========================================
-# Set USE_EMOJI=0 environment variable to disable emojis
-USE_EMOJI = os.environ.get("USE_EMOJI", "1") == "1"
-
-# Simple, widely-supported emojis with text fallbacks
-ICONS = {
-    # Actions
-    "add": ("➕", "[+]"),
-    "remove": ("➖", "[-]"),
-    "delete": ("🗑", "[-]"),
-    "save": ("💾", "[*]"),
-    "run": ("▶", "[>]"),
-    "stop": ("⏹", "[x]"),
-    "refresh": ("🔄", "[o]"),
-    "open": ("📂", "[>]"),
-    "close": ("✖", "[x]"),
-    "confirm": ("✔", "[*]"),
-    # Status
-    "ok": ("✓", "[OK]"),
-    "error": ("✗", "[ERR]"),
-    "warning": ("⚠", "[!]"),
-    "info": ("ℹ", "[i]"),
-    # Objects
-    "folder": ("📁", "[D]"),
-    "file": ("📄", "[F]"),
-    "archive": ("📦", "[A]"),
-    "clock": ("🕐", "[T]"),
-    "calendar": ("📅", "[C]"),
-    "settings": ("⚙", "[S]"),
-    "key": ("🔑", "[K]"),
-    "lock": ("🔒", "[L]"),
-    # Misc
-    "backup": ("💾", "[B]"),
-    "mount": ("💿", "[M]"),
-    "prune": ("✂", "[~]"),
-    "log": ("📋", "[L]"),
-    # Dashboard cards
-    "status": ("🟢", "[*]"),
-    "storage": ("💽", "[S]"),
-    "schedule": ("⏰", "[T]"),
-    "server": ("🖥", "[H]"),
-    "time": ("⏱", "[T]"),
-    "memory": ("🧠", "[M]"),
-    "disk": ("💿", "[D]"),
-    "network": ("🌐", "[N]"),
-}
-
-def icon(name: str) -> str:
-    """Get icon by name. Returns emoji if enabled, otherwise text fallback."""
-    if name not in ICONS:
-        return ""
-    emoji, fallback = ICONS[name]
-    return emoji if USE_EMOJI else fallback
-
-# ... (Keep format_bytes and time_since functions same as before)
-def format_bytes(size: int | float) -> str:
-    """Converts raw bytes to human readable string.
-    
-    Args:
-        size: Size in bytes
-        
-    Returns:
-        Human-readable string like "1.50 GB"
-    """
-    if not isinstance(size, (int, float)): return "0 B"
-    power = 1024
-    n = 0
-    power_labels = {0 : '', 1: 'K', 2: 'M', 3: 'G', 4: 'T', 5: 'P'}
-    while size > power:
-        size /= power
-        n += 1
-    return f"{size:.2f} {power_labels.get(n, '?')}B"
-
-def time_since(dt_str: str) -> str:
-    """Calculate human-readable time since given datetime string.
-    
-    Args:
-        dt_str: ISO format datetime string
-        
-    Returns:
-        Human-readable time like "5 hours ago"
-    """
-    # ... (Keep existing time_since code) ...
-    try:
-        dt_str = dt_str.replace('T', ' ')
-        if '.' in dt_str:
-            dt_str = dt_str.split('.')[0]
-        past = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        now = datetime.datetime.now()
-        diff = now - past
-        days = diff.days
-        seconds = diff.seconds
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        if days > 0: return f"{days} days ago"
-        elif hours > 0: return f"{hours} hours ago"
-        elif minutes > 0: return f"{minutes} mins ago"
-        else: return "Just now"
-    except: return "Unknown"
 
 # ==========================================
 # SSH HELPER (Cross-platform remote execution)
